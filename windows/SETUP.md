@@ -2,34 +2,25 @@
 
 Unofficial Windows setup guide for [`@kimuson/claude-code-viewer`](https://github.com/d-kimuson/claude-code-viewer).
 
-> The upstream project's README states "Windows is not supported" — this guide is a community workaround that wires up a local auto-start on `http://localhost:3400` via a one-file VBS launcher in the user Startup folder. No admin, no WSL, no Docker.
+> Upstream's README says "Windows is not supported." This guide gets the viewer running on `http://localhost:3400` with crash-auto-restart via **Task Scheduler + a supervisor VBS**. No admin, no WSL, no Docker.
 
-## Status of the upstream Windows blocker
+## Known Windows blockers
 
-The latest published release (≥ 0.7.0) crashes on first launch on Windows with:
-
-```
-ENOENT: no such file or directory, scandir 'C:\C:\Users\<you>\...\dist\migrations'
-```
-
-Doubled `C:\C:\` caused by `new URL(..., import.meta.url).pathname` returning `/C:/...` on Windows.
-
-Fix submitted as **[PR #201](https://github.com/d-kimuson/claude-code-viewer/pull/201)** to upstream. Until that merges and a release ships on npm, this guide builds from a patched fork.
-
-Other known Windows gaps (out of scope for PR #201, mostly tracked in upstream [PR #85](https://github.com/d-kimuson/claude-code-viewer/pull/85)):
-- `claude --version` subprocess fails with ENOENT because Node `spawn` without a shell doesn't apply PATHEXT. Worked around in this guide by passing `--executable <path>` explicitly.
-- `@replit/ruspty` has no Windows binary → in-app terminal panel disabled (warn-only; rest of viewer works).
+| Bug | Fixed by | Where |
+|---|---|---|
+| `C:\C:\...\dist\migrations` ENOENT on startup (doubled drive letter from `URL.pathname`) | **This fork, merged in advance of upstream** | PR [#201](https://github.com/d-kimuson/claude-code-viewer/pull/201) |
+| `claude --version` spawn fails because Node `spawn` (no shell) doesn't apply PATHEXT | Workaround: pass `--executable <path-to-claude.exe>` | VBS arg |
+| `USERPROFILE` expands to `C:\` when the task runs with `LogonType=S4U` (session 0) → file watcher tries `C:\.claude\projects` | Workaround: pass `--claude-dir <path>` explicitly, derived from `%LOCALAPPDATA%` | VBS arg |
+| `@replit/ruspty` ships no Windows binary → in-app terminal panel disabled (warn-only) | Open upstream | None — rest of viewer works |
 
 ## Prerequisites
 
 - **Windows 10 / 11** with PowerShell and Git Bash (install Git for Windows).
 - **Node.js ≥ 24.0.0** — required by `drizzle-orm/node-sqlite` for `StatementSync.setReturnArrays`.
-- **Claude Code CLI** already installed somewhere (the viewer shells out to it). Run `where claude` in `cmd` to find the `.exe`.
-- For the interim path only: `pnpm` (`npm install -g pnpm`) and **gitleaks** (pre-commit hook requirement — optional if you're only consuming, not contributing).
+- **Claude Code CLI** installed somewhere. `where claude` in `cmd` to find the `.exe`.
+- **pnpm** (`npm install -g pnpm`) — only needed until upstream releases include PR #201.
 
-### Install Node 24 without admin
-
-Install into user space so you don't overwrite any existing system Node:
+### Install Node 24 user-locally (no admin)
 
 ```bash
 # Git Bash
@@ -52,87 +43,121 @@ if (($u -split ';') -notcontains $n) {
 }
 ```
 
-New shells will pick up Node 24 first.
+## Build the patched viewer
 
-## Happy path — once PR #201 is merged AND released on npm
+```bash
+git config --global core.longpaths true    # some e2e snapshot paths exceed 260 chars
+mkdir -p "$USERPROFILE/code" && cd "$USERPROFILE/code"
+git -c core.longpaths=true clone --depth 1 --filter=blob:none --no-checkout \
+  https://github.com/aollivierre/claude-code-viewer.git
+cd claude-code-viewer
+git config core.longpaths true
+git sparse-checkout init --no-cone
+git sparse-checkout set '/*' '!e2e/snapshots'
+git checkout fix/windows-migrations-path
 
-Check here before deciding: <https://github.com/d-kimuson/claude-code-viewer/pull/201>. If it's merged and a newer version than 0.7.3 is on npm that includes the fix:
+export PATH="$LOCALAPPDATA/nodejs:$PATH"
+export npm_config_engine_strict=false   # sub-pnpm invocations don't always inherit PATH
+pnpm install --frozen-lockfile --config.engine-strict=false
+bash ./scripts/build.sh
+```
 
-1. Copy `windows/claude-code-viewer.vbs` from this repo to `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`.
-2. Open it in a text editor and **switch to Mode (A)**: uncomment the `cmd = "cmd /c npx ..."` block and comment out Mode (B).
-3. Confirm `claudeExe` points at your actual Claude Code CLI (`where claude` in cmd).
-4. Smoke-test: `cscript //nologo "$APPDATA/Microsoft/Windows/Start Menu/Programs/Startup/claude-code-viewer.vbs"` then `curl http://localhost:3400/api/projects` — expect HTTP 200.
-5. Open <http://localhost:3400/>.
+Result: `$USERPROFILE/code/claude-code-viewer/dist/main.js` is your runnable build.
 
-## Interim path — until PR #201 ships
+## Install the supervisor launcher
 
-1. **Clone the patched fork** with long-path support and skip the e2e snapshots (some paths exceed Windows' 260-char limit):
+```bash
+mkdir -p "$LOCALAPPDATA/claude-code-viewer"
+cp "$USERPROFILE/code/claude-code-viewer/windows/claude-code-viewer.vbs" \
+   "$LOCALAPPDATA/claude-code-viewer/claude-code-viewer.vbs"
+```
 
-   ```bash
-   git config --global core.longpaths true
-   mkdir -p "$USERPROFILE/code" && cd "$USERPROFILE/code"
-   git -c core.longpaths=true clone --depth 1 --filter=blob:none --no-checkout \
-     https://github.com/aollivierre/claude-code-viewer.git
-   cd claude-code-viewer
-   git config core.longpaths true
-   git sparse-checkout init --no-cone
-   git sparse-checkout set '/*' '!e2e/snapshots'
-   git checkout fix/windows-migrations-path
-   ```
+**Read the VBS** — it hardcodes these paths inside the launcher (all derived from `%LOCALAPPDATA%` so they work in session 0):
 
-2. **Install deps and build** (Node 24 must be on PATH; `engine-strict=false` bypasses sub-pnpm engine checks that sometimes don't inherit the parent PATH):
+| Variable | Default | Edit if |
+|---|---|---|
+| `nodeExe` | `%LOCALAPPDATA%\nodejs\node.exe` | you installed Node elsewhere |
+| `mainJs` | `%USERPROFILE%\code\claude-code-viewer\dist\main.js` | you cloned elsewhere |
+| `claudeExe` | `%USERPROFILE%\.local\bin\claude.exe` | `where claude` says different |
+| `claudeDir` | `%USERPROFILE%\.claude` | non-default Claude Code dir |
+| port | `3400` | port in use |
 
-   ```bash
-   export PATH="$LOCALAPPDATA/nodejs:$PATH"
-   export npm_config_engine_strict=false
-   pnpm install --frozen-lockfile --config.engine-strict=false
-   bash ./scripts/build.sh
-   ```
+## Register the scheduled task
 
-3. **Install the VBS launcher:**
+Run this in **PowerShell** (no admin needed for this configuration):
 
-   ```bash
-   cp windows/claude-code-viewer.vbs \
-     "$APPDATA/Microsoft/Windows/Start Menu/Programs/Startup/"
-   ```
+```powershell
+$taskName = 'ClaudeCodeViewer'
+$vbs = "$env:LOCALAPPDATA\claude-code-viewer\claude-code-viewer.vbs"
+# Use the actual interactive identity — $env:USERNAME can be wrong under
+# some launcher contexts (e.g. when this PowerShell was itself spawned
+# from a service). GetCurrent().Name is authoritative.
+$user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 
-   Open the copied VBS in a text editor and confirm:
-   - It's in **Mode (B)** (the one with `nodeExe` / `mainJs` uncommented) — that's the default in this template.
-   - `mainJs` points at your actual `dist/main.js` location (default assumes `%USERPROFILE%\code\claude-code-viewer\dist\main.js`).
-   - `claudeExe` points at your actual Claude Code CLI.
+Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
 
-4. **Smoke-test without rebooting:**
+$action    = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vbs`""
+$trigger   = New-ScheduledTaskTrigger -AtLogOn -User $user
+$settings  = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+    -RestartInterval (New-TimeSpan -Minutes 1) -RestartCount 999 `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+# S4U (Service For User) — avoids the "user not logged on" false negative
+# Task Scheduler can throw under RDP / Windows Hello / Azure AD sessions
+# when using LogonType Interactive. The tradeoff is that the task runs in
+# session 0, which is why the VBS derives paths from %LOCALAPPDATA%
+# rather than %USERPROFILE% (see top of windows/claude-code-viewer.vbs).
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType S4U -RunLevel Limited
 
-   ```bash
-   cscript //nologo "$APPDATA/Microsoft/Windows/Start Menu/Programs/Startup/claude-code-viewer.vbs"
-   sleep 15
-   curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:3400/api/projects
-   # expect HTTP 200
-   ```
+Register-ScheduledTask -TaskName $taskName `
+    -Description 'Auto-start Claude Code Viewer on localhost:3400 (supervised)' `
+    -Action $action -Trigger $trigger -Settings $settings -Principal $principal
+```
 
-5. Open <http://localhost:3400/>.
+## Smoke-test without rebooting
+
+```powershell
+Start-ScheduledTask -TaskName 'ClaudeCodeViewer'
+```
+
+```bash
+sleep 15
+curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:3400/api/projects  # expect 200
+```
+
+Open <http://localhost:3400/>. First launch takes ~15–25 s while node / node_modules warm up.
+
+## Verifying crash recovery
+
+```bash
+# find and kill node
+PID=$(netstat -ano | grep ":3400.*LISTENING" | awk '{print $NF}' | head -1)
+taskkill //PID $PID //F
+
+# should be back in ~5–10 s (VBS supervisor backoff + node startup)
+for i in $(seq 1 30); do
+  netstat -ano | grep -qE ":3400\b.*LISTENING" && echo "respawned at +${i}s" && break
+  sleep 1
+done
+```
 
 ## Operating notes
 
-- **Log file**: `%LOCALAPPDATA%\claude-code-viewer\viewer.log` — grows without rotation; delete periodically.
-- **Port**: the VBS hardcodes `3400`. Change `--port 3400` if taken.
-- **Process lifetime**: tied to your user session. Logoff kills it; login re-launches via the Startup folder entry. No auto-restart on crash — if you need that, convert the launcher to a Task Scheduler entry with "Restart if the task fails" enabled.
-- **Stop**: find the PID with `netstat -ano | findstr :3400`, then `taskkill /F /PID <pid>`. Don't `taskkill /IM node.exe` unless you're sure no other Node apps are running.
-- **Disable auto-start**: delete the VBS from the Startup folder.
-- **Known CLI caveat**: the viewer passes the `--executable` path verbatim to `spawn`. Keep it pointed at the `.exe` (or `.cmd`) — a bare `claude` with no extension won't resolve without a shell.
+- **Log**: `%LOCALAPPDATA%\claude-code-viewer\viewer.log` — grows without rotation; prune periodically.
+- **Stop permanently**: stop the scheduled task. `Stop-ScheduledTask -TaskName ClaudeCodeViewer` — this kills wscript, which kills its cmd+node chain. If you just `taskkill node.exe`, the VBS supervisor will relaunch it in ~5 s.
+- **Disable auto-start**: `Disable-ScheduledTask -TaskName ClaudeCodeViewer` (keeps the definition) or `Unregister-ScheduledTask` (removes it).
+- **Port conflict**: edit `--port 3400` in `claude-code-viewer.vbs`, then `Stop-ScheduledTask` + `Start-ScheduledTask`.
+- **Update to newer fork commit**: `cd ~/code/claude-code-viewer && git pull && bash scripts/build.sh` — the running supervisor will pick up the new `dist/main.js` after the next restart (`taskkill node` is enough).
+- **Switch to upstream once PR #201 ships**: replace the VBS's `cmd` line with `"cmd /c npx --yes @kimuson/claude-code-viewer@latest --port 3400 --claude-dir " & q & claudeDir & q & " --executable " & q & claudeExe & q & " >> " & q & logFile & q & " 2>&1"`, restart the task, delete the clone at `~/code/claude-code-viewer`.
 
-## What to do on a fresh machine
+## Why this design
 
-Copy-paste the following into a new Claude Code session on the new box:
+- **Task Scheduler over Startup folder**: Startup folder fires only at login. If the viewer dies mid-session, it stays dead until next login. Task Scheduler keeps the supervisor alive independently of user sessions.
+- **Supervisor loop in VBS over Task Scheduler's built-in restart**: Task Scheduler's "restart on failure" only fires when the task *fails to launch* (permission, missing file) — not when the action returns non-zero. A long-running process crash returns non-zero, which Task Scheduler treats as "completed, OK" and does not restart. The VBS loop handles that case. Task Scheduler is still useful for starting the supervisor and restarting it if it itself dies.
+- **S4U over Interactive**: Interactive logon type checks for an active interactive desktop session, which fails under RDP / Windows Hello / Azure AD even when the user is obviously logged on. S4U avoids the check. The cost is running in session 0 — we work around that by computing paths from `%LOCALAPPDATA%` (which works) rather than `%USERPROFILE%` (which breaks).
 
-> Read <https://github.com/aollivierre/claude-code-viewer/blob/main/windows/SETUP.md> and set up the Claude Code Viewer to auto-start on `http://localhost:3400`. Check PR #201 status first to decide happy vs. interim path. Report when the viewer is live and `curl http://localhost:3400/api/projects` returns 200.
+## Fresh-machine prompt
 
-## Upstream contribution status
+Paste this into a Claude Code session on a new Windows 11 box:
 
-| Bug                                 | Fixed by                 | Status             |
-| ----------------------------------- | ------------------------ | ------------------ |
-| `C:\C:\...\dist\migrations` ENOENT  | PR #201 (this fork)      | Open, awaiting review |
-| `claude` spawn without PATHEXT      | PR #85 (not this fork)   | WIP since Dec 2025 |
-| `@replit/ruspty` no Windows binary  | —                        | Upstream gap, terminal panel disabled as a consequence |
-
-If/when PR #201 and PR #85 both merge and release, this fork can be retired — remote users switch their VBS to Mode (A) and the guide boils down to "install Node 24, drop the VBS, done."
+> Set up `@kimuson/claude-code-viewer` to auto-start on `http://localhost:3400` with crash-auto-restart. Follow <https://github.com/aollivierre/claude-code-viewer/blob/main/windows/SETUP.md> end to end. Before starting, check <https://github.com/d-kimuson/claude-code-viewer/pull/201> — if merged and released to npm with a version newer than 0.7.3, you can skip the fork build and edit the VBS to use `npx --yes @kimuson/claude-code-viewer@latest` instead of the local `node ... dist/main.js`. Report back with: the Node version you installed, the path to your `claude.exe`, the task's `LastTaskResult` after `Start-ScheduledTask`, and the HTTP status from `curl http://localhost:3400/api/projects`.

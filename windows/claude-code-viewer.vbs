@@ -1,52 +1,50 @@
-' Claude Code Viewer auto-start (Windows)
+' Claude Code Viewer launcher (Task Scheduler target — supervisor loop)
 '
-' Drop this file at:
-'   %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\claude-code-viewer.vbs
+' Invoked by the "ClaudeCodeViewer" scheduled task at user logon.
+' Runs the viewer hidden and relaunches it forever if the node
+' process exits for any reason (crash, OOM kill, manual taskkill).
 '
-' It launches the viewer hidden at login and appends logs to
-'   %LOCALAPPDATA%\claude-code-viewer\viewer.log
-'
-' Two run modes — uncomment ONE:
-'
-'   (A) HAPPY PATH — latest published npm version. Use this once PR #201
-'       (https://github.com/d-kimuson/claude-code-viewer/pull/201) is merged
-'       AND a release containing it has shipped to npm.
-'
-'   (B) INTERIM PATH — run a locally built copy of the fork. Use this until
-'       upstream releases a version with PR #201.
-'
-' Both modes need Node >= 24.0.0 on PATH (or at the path below) and rely on
-' the viewer's --executable flag to find claude.exe without PATHEXT shell
-' resolution.
+' Log file: %LOCALAPPDATA%\claude-code-viewer\viewer.log
 
 Set sh  = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
-logDir    = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%\claude-code-viewer")
+logDir  = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%\claude-code-viewer")
 If Not fso.FolderExists(logDir) Then fso.CreateFolder(logDir)
-logFile   = logDir & "\viewer.log"
+logFile = logDir & "\viewer.log"
 
-' Path to the Claude Code CLI executable. If you installed claude via the
-' official Windows installer this is where it lives; adjust if yours differs.
-' Use "where claude" in cmd or "which claude" in Git Bash to confirm.
-claudeExe = sh.ExpandEnvironmentStrings("%USERPROFILE%\.local\bin\claude.exe")
+' When launched via Task Scheduler with LogonType=S4U, the task runs in
+' session 0 where %USERPROFILE% does NOT resolve to the user's home —
+' it comes back as "C:\" and the viewer ends up trying to watch
+' "C:\.claude\projects". Resolve paths via the well-known user SID
+' profile list or hard-code for reliability. We expand LOCALAPPDATA
+' (which DOES work in session 0) to derive the profile root.
+localAppData = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%")  ' C:\Users\i\AppData\Local
+userProfile  = fso.GetParentFolderName(fso.GetParentFolderName(localAppData))  ' C:\Users\i
 
-' ---- Mode (A) HAPPY PATH: npx @latest -----------------------------------
-' nodeExe and mainJs are not needed in this mode (npx handles it).
-'
-' q = Chr(34)
-' cmd = "cmd /c npx --yes @kimuson/claude-code-viewer@latest" & _
-'       " --port 3400 --executable " & q & claudeExe & q & _
-'       " >> " & q & logFile & q & " 2>&1"
-
-' ---- Mode (B) INTERIM PATH: locally built fork --------------------------
-' Adjust these two paths to match your machine.
-nodeExe = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%\nodejs\node.exe")
-mainJs  = sh.ExpandEnvironmentStrings("%USERPROFILE%\code\claude-code-viewer\dist\main.js")
+nodeExe   = localAppData & "\nodejs\node.exe"
+mainJs    = userProfile  & "\code\claude-code-viewer\dist\main.js"
+claudeExe = userProfile  & "\.local\bin\claude.exe"
+claudeDir = userProfile  & "\.claude"
 
 q = Chr(34)
 cmd = "cmd /c " & q & q & nodeExe & q & " " & q & mainJs & q & _
-      " --port 3400 --executable " & q & claudeExe & q & _
+      " --port 3400" & _
+      " --claude-dir "  & q & claudeDir  & q & _
+      " --executable " & q & claudeExe & q & _
       " >> " & q & logFile & q & " 2>&1" & q
 
-sh.Run cmd, 0, False
+' Supervisor loop: launch the viewer hidden, wait for it to exit, then
+' sleep and relaunch forever. This VBS becomes the crash-recovery
+' supervisor — Task Scheduler's built-in "restart on failure" only
+' handles launch failures (permissions, user-not-logged-on, etc.),
+' NOT non-zero action exit codes from long-running processes, so a
+' loop here is the reliable option.
+'
+' To stop the viewer permanently: stop the "ClaudeCodeViewer" scheduled
+' task (End-ScheduledTask or Task Scheduler UI). Killing just the node
+' process will cause this loop to relaunch it within ~5 seconds.
+Do
+  sh.Run cmd, 0, True   ' 0 = hidden window; True = wait for child exit
+  WScript.Sleep 5000    ' brief backoff before respawn
+Loop
