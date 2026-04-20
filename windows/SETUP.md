@@ -8,10 +8,29 @@ Unofficial Windows setup guide for [`@kimuson/claude-code-viewer`](https://githu
 
 | Bug | Fixed by | Where |
 |---|---|---|
-| `C:\C:\...\dist\migrations` ENOENT on startup (doubled drive letter from `URL.pathname`) | **This fork, merged in advance of upstream** | PR [#201](https://github.com/d-kimuson/claude-code-viewer/pull/201) |
+| `C:\C:\...\dist\migrations` ENOENT on startup (doubled drive letter from `URL.pathname`) | **This fork's `main` branch** (upstream PR still open) | PR [#201](https://github.com/d-kimuson/claude-code-viewer/pull/201) |
 | `claude --version` spawn fails because Node `spawn` (no shell) doesn't apply PATHEXT | Workaround: pass `--executable <path-to-claude.exe>` | VBS arg |
 | `USERPROFILE` expands to `C:\` when the task runs with `LogonType=S4U` (session 0) → file watcher tries `C:\.claude\projects` | Workaround: pass `--claude-dir <path>` explicitly, derived from `%LOCALAPPDATA%` | VBS arg |
 | `@replit/ruspty` ships no Windows binary → in-app terminal panel disabled (warn-only) | Open upstream | None — rest of viewer works |
+
+## Migrating from the npm-global install
+
+If you previously ran `npm i -g @kimuson/claude-code-viewer` and used a Startup-folder shortcut to auto-start it, **disable that first** — otherwise the old instance holds port 3400, its HTTP 200 masks a broken fork build, and the supervised setup can't take over.
+
+```powershell
+# 1. Disable the Startup-folder shortcut (reversible — we rename, not delete)
+$lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\ClaudeCodeViewer.lnk"
+if (Test-Path $lnk) { Move-Item -LiteralPath $lnk -Destination "$lnk.bak" -Force }
+
+# 2. Kill any listener on 3400
+netstat -ano | Select-String ':3400 .*LISTENING' | ForEach-Object {
+  $procId = ($_ -split '\s+')[-1]
+  Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+}
+
+# 3. (optional) Remove the global package entirely
+# npm uninstall -g @kimuson/claude-code-viewer
+```
 
 ## Prerequisites
 
@@ -19,6 +38,10 @@ Unofficial Windows setup guide for [`@kimuson/claude-code-viewer`](https://githu
 - **Node.js ≥ 24.0.0** — required by `drizzle-orm/node-sqlite` for `StatementSync.setReturnArrays`.
 - **Claude Code CLI** installed somewhere. `where claude` in `cmd` to find the `.exe`.
 - **pnpm** (`npm install -g pnpm`) — only needed until upstream releases include PR #201.
+
+### Shell choice
+
+Commands below split by shell deliberately. Run `npm`, `pnpm`, `node`, and every PowerShell cmdlet from **PowerShell** — Git Bash's MSYS path conversion mangles `.cmd` shim arguments and breaks npm with `Cannot find module 'C:\Program Files\Git\Users\...'`. Keep Git Bash for `git`, `curl`, `cp`, `unzip`, `mkdir`, and for invoking `bash ./scripts/build.sh`.
 
 ### Install Node 24 user-locally (no admin)
 
@@ -45,6 +68,8 @@ if (($u -split ';') -notcontains $n) {
 
 ## Build the patched viewer
 
+Clone in **Git Bash** (sparse-checkout trims the ~1800 e2e snapshot files that blow up `pnpm install` wall time):
+
 ```bash
 git config --global core.longpaths true    # some e2e snapshot paths exceed 260 chars
 mkdir -p "$USERPROFILE/code" && cd "$USERPROFILE/code"
@@ -54,10 +79,16 @@ cd claude-code-viewer
 git config core.longpaths true
 git sparse-checkout init --no-cone
 git sparse-checkout set '/*' '!e2e/snapshots'
-git checkout fix/windows-migrations-path
+git checkout main
+```
 
-export PATH="$LOCALAPPDATA/nodejs:$PATH"
-export npm_config_engine_strict=false   # sub-pnpm invocations don't always inherit PATH
+Install and build in **PowerShell** (Git Bash mangles npm.cmd args — see "Shell choice" above):
+
+```powershell
+$env:PATH = "$env:LOCALAPPDATA\nodejs;$env:PATH"
+$env:npm_config_engine_strict = 'false'
+Set-Location "$env:USERPROFILE\code\claude-code-viewer"
+npm install -g pnpm
 pnpm install --frozen-lockfile --config.engine-strict=false
 bash ./scripts/build.sh
 ```
@@ -160,4 +191,4 @@ done
 
 Paste this into a Claude Code session on a new Windows 11 box:
 
-> Set up `@kimuson/claude-code-viewer` to auto-start on `http://localhost:3400` with crash-auto-restart. Follow <https://github.com/aollivierre/claude-code-viewer/blob/main/windows/SETUP.md> end to end. Before starting, check <https://github.com/d-kimuson/claude-code-viewer/pull/201> — if merged and released to npm with a version newer than 0.7.3, you can skip the fork build and edit the VBS to use `npx --yes @kimuson/claude-code-viewer@latest` instead of the local `node ... dist/main.js`. Report back with: the Node version you installed, the path to your `claude.exe`, the task's `LastTaskResult` after `Start-ScheduledTask`, and the HTTP status from `curl http://localhost:3400/api/projects`.
+> Set up `@kimuson/claude-code-viewer` to auto-start on `http://localhost:3400` with crash-auto-restart. Follow <https://github.com/aollivierre/claude-code-viewer/blob/main/windows/SETUP.md> end to end — including the "Migrating from the npm-global install" section if this box previously auto-started the viewer from the Startup folder. Before starting, check <https://github.com/d-kimuson/claude-code-viewer/pull/201> — if merged and released to npm with a version newer than 0.7.4, you can skip the fork build and edit the VBS to use `npx --yes @kimuson/claude-code-viewer@latest` instead of the local `node ... dist/main.js`. Report back with: the Node version you installed, the path to your `claude.exe`, the task's `LastTaskResult` after `Start-ScheduledTask`, and the HTTP status from `curl http://localhost:3400/api/projects`.
