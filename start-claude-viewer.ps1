@@ -1,11 +1,10 @@
 # Claude Code Viewer Startup Script
-# Runs claude-code-viewer on port 3400 with password authentication
+# Runs claude-code-viewer on port 3400 without password authentication
 
 $ErrorActionPreference = 'Stop'
 
 # Configuration
 $Port = 3400
-$Password = '7FZQHKrfQTQFANx9JDHbkrNCVV6JPF58'
 $Hostname = '0.0.0.0'
 $LogFile = "$env:USERPROFILE\.claude\viewer-service.log"
 
@@ -21,7 +20,7 @@ Add-Content -Path $LogFile -Value "[$timestamp] Starting Claude Code Viewer on p
 
 try {
     # Run claude-code-viewer with CLI arguments (this will block)
-    & "$env:APPDATA\npm\claude-code-viewer.cmd" -p $Port -h $Hostname -P $Password
+    & "$env:APPDATA\npm\claude-code-viewer.cmd" -p $Port -h $Hostname
 }
 catch {
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
