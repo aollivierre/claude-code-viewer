@@ -10,7 +10,7 @@ Setup of `@kimuson/claude-code-viewer` on Windows 11 without Docker, configured 
 ## Issues Encountered
 
 ### Issue 1: Environment Variables Not Working
-**Symptom:** Server started but bound to wrong IP address (198.18.1.154 instead of 0.0.0.0)
+**Symptom:** Server started but bound to wrong IP address (`<NIC_IP>` instead of `0.0.0.0`)
 
 **Root Cause:** Environment variables (`CCV_PASSWORD`, `CCV_HOSTNAME`, `PORT`) set in PowerShell script were not being picked up by the node process.
 
@@ -32,15 +32,15 @@ $env:CCV_PASSWORD = $Password
 
 **Root Cause:** Password contained special characters (`*`, `&`, `^`) that caused shell escaping issues when passed through PowerShell → cmd → node chain.
 
-**Original Password:** `kHBw*P&zaNQDCfkzVW^FFMKz`
+**Original Password:** `<EXAMPLE_PASSWORD_WITH_SPECIAL_CHARS>`
 
 **Solution:** Use alphanumeric-only passwords to avoid shell escaping problems:
 ```powershell
 # WRONG - special chars cause escaping issues
-$Password = 'kHBw*P&zaNQDCfkzVW^FFMKz'
+$Password = '<EXAMPLE_PASSWORD_WITH_SPECIAL_CHARS>'
 
 # CORRECT - alphanumeric only
-$Password = '7FZQHKrfQTQFANx9JDHbkrNCVV6JPF58'
+$Password = '<EXAMPLE_ALPHANUMERIC_PASSWORD>'
 ```
 
 **Password Generation (safe characters only):**
@@ -87,7 +87,7 @@ WshShell.Run "powershell.exe -WindowStyle Hidden ...", 0, False
 
 ### Access Details
 - **URL:** http://localhost:3400
-- **Password:** `7FZQHKrfQTQFANx9JDHbkrNCVV6JPF58`
+- **Password:** `<EXAMPLE_ALPHANUMERIC_PASSWORD>`
 - **Listening:** `0.0.0.0:3400` (accessible from network)
 
 ### Auto-Start Location
@@ -116,17 +116,17 @@ WshShell.Run "powershell.exe -WindowStyle Hidden ...", 0, False
 npm install -g @kimuson/claude-code-viewer
 
 # 2. Run install script
-powershell -ExecutionPolicy Bypass -File "C:\code\claude\code-viewer\install-startup.ps1"
+powershell -ExecutionPolicy Bypass -File "<INSTALL_DIR>\install-startup.ps1"
 
 # 3. Start now (or reboot)
-wscript "C:\code\claude\code-viewer\start-claude-viewer.vbs"
+wscript "<INSTALL_DIR>\start-claude-viewer.vbs"
 ```
 
 ## To Uninstall
 
 ```powershell
 # Stop the service
-powershell -ExecutionPolicy Bypass -File "C:\code\claude\code-viewer\kill-viewer.ps1"
+powershell -ExecutionPolicy Bypass -File "<INSTALL_DIR>\kill-viewer.ps1"
 
 # Remove from startup
 Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\ClaudeCodeViewer.lnk"

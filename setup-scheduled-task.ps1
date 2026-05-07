@@ -4,7 +4,8 @@
 $ErrorActionPreference = 'Stop'
 
 $TaskName = 'ClaudeCodeViewer'
-$ScriptPath = 'C:\code\claude\code-viewer\start-claude-viewer.ps1'
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptPath = Join-Path $ScriptDir 'start-claude-viewer.ps1'
 
 # Remove existing task if present
 $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
