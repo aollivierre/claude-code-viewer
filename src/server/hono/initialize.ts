@@ -69,6 +69,30 @@ export class InitializeService extends Context.Tag("InitializeService")<
           // ファイルウォッチャーを開始
           yield* fileWatcher.startWatching();
 
+          // Periodic fullSync daemon - backstop for missed file-watcher events
+          // (Node fs.watch recursive mode is unreliable on Windows for new directories).
+          // Runs every 2 minutes; fullSync is cheap when nothing has changed.
+          const periodicSyncDaemon = Effect.repeat(
+            Effect.gen(function* () {
+              yield* Effect.logInfo("[InitializeService] Periodic fullSync starting...");
+              const start = Date.now();
+              yield* syncService.fullSync().pipe(
+                Effect.catchAll((e) => {
+                  Effect.runFork(
+                    Effect.logError(`[InitializeService] periodic fullSync failed: ${String(e)}`),
+                  );
+                  return Effect.void;
+                }),
+              );
+              yield* Effect.logInfo(
+                `[InitializeService] Periodic fullSync completed in ${Date.now() - start}ms`,
+              );
+            }),
+            Schedule.fixed("2 minutes"),
+          );
+          yield* Effect.forkDaemon(periodicSyncDaemon);
+          yield* Effect.logInfo("Periodic fullSync daemon started (interval: 2 minutes)");
+
           // Start all enabled scheduled jobs
           yield* schedulerService.startScheduler.pipe(
             Effect.provide(schedulerRuntimeLayer),

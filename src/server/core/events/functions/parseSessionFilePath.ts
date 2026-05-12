@@ -35,6 +35,9 @@ export type FileMatch = SessionFileMatch | AgentFileMatch | null;
  * @returns FileMatch object with type and extracted IDs, or null if not a recognized file
  */
 export const parseSessionFilePath = (filePath: string): FileMatch => {
+  // Normalize Windows path separators so the regexes (which match "/") work on Windows
+  filePath = filePath.replace(/\\/g, "/");
+
   // Check for agent file first (more specific pattern)
   const agentMatch = filePath.match(agentFileRegExp);
   const agentGroups = agentFileGroupSchema.safeParse(agentMatch?.groups);
